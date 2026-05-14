@@ -42,7 +42,7 @@ main.c
 | Product ID | `0x0001` |
 | bcdDevice | `0x0100` |
 | Manufacturer String | `"USB HID Project"` |
-| Product String | `"Custom Stream Deck v1"` |
+| Product String | `"Custom Button Emulation v1"` |
 | Serial | Board unique ID (via `board_get_unique_id`) |
 
 **Kernel module matching:** Match on `VID 0x1209 + PID 0x0001` or HID usage page `0xFF00`.
@@ -162,18 +162,18 @@ The device can be identified in a Linux kernel module by:
 
 ```c
 // USB device match
-static const struct usb_device_id streamdeck_table[] = {
+static const struct usb_device_id usb_device_table[] = {
     { USB_DEVICE(0x1209, 0x0001) },
     { }
 };
-MODULE_DEVICE_TABLE(usb, streamdeck_table);
+MODULE_DEVICE_TABLE(usb, usb_device_table);
 
 // Or via HID driver match
-static const struct hid_device_id streamdeck_hid_table[] = {
+static const struct hid_device_id usb_hid_table[] = {
     { HID_USB_DEVICE(0x1209, 0x0001) },
     { }
 };
-MODULE_DEVICE_TABLE(hid, streamdeck_hid_table);
+MODULE_DEVICE_TABLE(hid, usb_hid_table);
 ```
 
 The HID report uses vendor-defined usage page `0xFF00`. Raw event data can be read from the HID device node (`/dev/hidraw*`) or via the HID subsystem's `->raw_event` or `->input_event` callbacks.

@@ -18,7 +18,7 @@ sys.path = [p for p in sys.path if not p.endswith("Usb_hid/hid")]
 import hid
 
 #Set the VID and PID to match your Vendor and Product id as set on /cofig/hid_config.h
-VID = 0x6666
+VID = 0x1209
 PID = 0x0001
 
 BUTTON_NAMES = ["SW0", "SW1", "SW2", "SW3", "SW4", "SW5", "SW6", "SW7"]
@@ -35,7 +35,7 @@ def main():
     info = find_device()
     if not info:
         print(f"Device {VID:#06x}:{PID:#06x} not found.", file=sys.stderr)
-        print("Check: lsusb | grep 6666", file=sys.stderr)
+        print("Check: lsusb | grep " + hex(VID)[2:], file=sys.stderr)
         sys.exit(1)
 
     print(f"Found: {info['manufacturer_string']} {info['product_string']}", flush=True)

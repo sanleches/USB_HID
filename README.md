@@ -1,4 +1,4 @@
-# Custom Stream Deck — USB HID Button Controller
+# Custom USB HID Button Controller
 
 A Raspberry Pi Pico 2 W firmware that emulates a Stream Deck-like USB HID device with 32 virtual buttons. Built on Pico SDK 2.2.0 + TinyUSB 0.18.0.
 
