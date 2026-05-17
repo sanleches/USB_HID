@@ -68,7 +68,7 @@
  * Normal Mode Button Configuration
  * =============================================================================
  * Maps physical GPIO pins to HID button indices.
- * Uses internal pull-down resistors (button connects pin to 3.3V when pressed).
+ * Uses internal pull-up resistors (button connects pin to GND when pressed).
  * NORMAL_BUTTON_COUNT: number of physical buttons.
  * NORMAL_BUTTON_GPIO_PINS: GPIO pins (order maps to HID indices 0..N-1).
  */
@@ -82,7 +82,7 @@
  * Debounce window in milliseconds. A button state must be stable for this
  * duration before being accepted.
  */
-#define DEBOUNCE_MS              25
+#define DEBOUNCE_MS              10
 
 /*
  * =============================================================================

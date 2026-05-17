@@ -6,8 +6,8 @@
  * Button GPIO Abstraction
  * =============================================================================
  * Provides debounced reading of physical buttons connected to GPIO pins.
- * Uses the Pico's internal pull-down resistors so buttons connect the pin
- * to 3.3V when pressed.
+ * Uses the Pico's internal pull-up resistors so buttons connect the pin
+ * to GND when pressed (active-low).
  *
  * Debounce logic: a button state is accepted only after it remains stable
  * for DEBOUNCE_MS consecutive milliseconds.
@@ -37,7 +37,7 @@ typedef struct button_state button_state_t;
 
 /*
  * Initialize a button bank.
- * Configures all specified GPIO pins as inputs with pull-down.
+ * Configures all specified GPIO pins as inputs with pull-up.
  * @param config  Button configuration (pins and count). Must remain valid.
  * @return Handle for subsequent calls, or NULL on failure.
  */

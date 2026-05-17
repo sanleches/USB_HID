@@ -42,7 +42,7 @@ button_state_t *button_init(const button_config_t *config) {
         uint8_t pin = config->gpio_pins[i];
         gpio_init(pin);
         gpio_set_dir(pin, GPIO_IN);
-        gpio_pull_down(pin);
+        gpio_pull_up(pin);
     }
 
     return state;
@@ -55,37 +55,41 @@ void button_update(button_state_t *state) {
     uint32_t raw = 0;
 
     for (uint8_t i = 0; i < cfg->count; i++) {
-        if (gpio_get(cfg->gpio_pins[i])) {
+        /* Active-low wiring: pressed connects GPIO to GND. */
+        if (!gpio_get(cfg->gpio_pins[i])) {
             raw |= (1u << i);
         }
     }
 
-    uint32_t changed = raw ^ (*state->raw_history);
+    uint32_t prev_raw = *state->raw_history;
     *state->raw_history = raw;
 
     for (uint8_t i = 0; i < cfg->count; i++) {
         uint32_t bit = (1u << i);
 
-        if (!(changed & bit)) {
-            /* No change: reset debounce counter */
+        bool current_raw = (raw & bit) != 0;
+        bool previous_raw = (prev_raw & bit) != 0;
+        bool current_deb = (*state->debounced & bit) != 0;
+
+        if (current_raw == current_deb) {
+            /* Already debounced to current state */
             state->debounce_counters[i] = 0;
             continue;
         }
 
-        bool current_raw = (raw & bit) != 0;
-        bool current_deb = (*state->debounced & bit) != 0;
+        if (current_raw != previous_raw) {
+            /* Raw signal just changed; wait for it to stabilize */
+            state->debounce_counters[i] = 0;
+            continue;
+        }
 
-        if (current_raw != current_deb) {
-            state->debounce_counters[i]++;
-            if (state->debounce_counters[i] >= DEBOUNCE_MS) {
-                if (current_raw) {
-                    *state->debounced |= bit;
-                } else {
-                    *state->debounced &= ~bit;
-                }
-                state->debounce_counters[i] = 0;
+        state->debounce_counters[i] += USB_POLL_INTERVAL_MS;
+        if (state->debounce_counters[i] >= DEBOUNCE_MS) {
+            if (current_raw) {
+                *state->debounced |= bit;
+            } else {
+                *state->debounced &= ~bit;
             }
-        } else {
             state->debounce_counters[i] = 0;
         }
     }
