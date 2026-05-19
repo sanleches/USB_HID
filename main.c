@@ -58,15 +58,15 @@ static void led_blinking_task(void) {
 // USB Device Callbacks
 //--------------------------------------------------------------------
 
-void tud_mount_cb(void) {
-    _led_blink_interval_ms = LED_BLINK_MOUNTED_MS;
+void tud_mount_cb(void) {// Called when the USB host successfully mounts the device
+    _led_blink_interval_ms = LED_BLINK_MOUNTED_MS;// Set LED to solid on when mounted
 }
 
-void tud_umount_cb(void) {
+void tud_umount_cb(void) {  // Called when the USB host unmounts the device
     _led_blink_interval_ms = LED_BLINK_NOT_MOUNTED_MS;
 }
 
-void tud_suspend_cb(bool remote_wakeup_en) {
+void tud_suspend_cb(bool remote_wakeup_en) {// Called when the USB host suspends the device (e.g. PC goes to sleep)
     (void) remote_wakeup_en;
     _led_blink_interval_ms = LED_BLINK_SUSPENDED_MS;
 }

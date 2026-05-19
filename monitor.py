@@ -20,7 +20,7 @@ except ModuleNotFoundError:
     )
     sys.exit(1)
 
-VID = 0x1209
+VID = 0x6666
 PID = 0x0001
 BUTTON_NAMES = ["SW0", "SW1", "SW2", "SW3", "SW4", "SW5", "SW6", "SW7"]
 

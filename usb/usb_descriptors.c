@@ -12,7 +12,7 @@
 
 const uint8_t desc_hid_report[] = {
     0x06, 0x00, 0xFF,          // Usage Page (Vendor Page 0xFF00)
-    0x09, 0x01,                // Usage (Vendor Usage 0x01 - Stream Deck)
+    0x09, 0x01,                // Usage (Vendor Usage 0x01)
     0xA1, 0x01,                // Collection (Application)
 
     // --- Input: Button State Bitmask (Report ID 1) ---

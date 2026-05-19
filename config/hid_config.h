@@ -9,7 +9,7 @@
  * VID 0x1209 is in the "Generic USB PID" range (prototype/development use).
  * Change these to match your kernel module's expected values.
  */
-#define USB_VID                  0x1209
+#define USB_VID                  0x6666
 #define USB_PID                  0x0001
 #define USB_BCD_DEVICE           0x0100
 
