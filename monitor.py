@@ -1,10 +1,34 @@
 #!/usr/bin/env python3
-"""Monitor USB HID button reports from the Pico firmware."""
+"""
+=============================================================================
+USB HID Button Monitor
+=============================================================================
+
+Host-side diagnostic tool for the Raspberry Pi Pico USB HID firmware.
+
+The firmware sends a vendor-defined HID input report containing a 32-bit button
+bitmask. This script opens that HID device with hidapi, decodes the incoming
+button reports, and presents them in one of three formats:
+
+  1. Live dashboard - full-screen terminal UI for wiring/debug sessions
+  2. Event log      - one line per state transition plus periodic status
+  3. Raw dump       - raw report bytes plus decoded mask
+
+Keep DEVICE_VENDOR_ID and DEVICE_PRODUCT_ID in sync with config/hid_config.h.
+"""
+
+from __future__ import annotations
 
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Sequence
+
+
+# -----------------------------------------------------------------------------
+# Third-Party HID Module Loading
+# -----------------------------------------------------------------------------
 
 # Prevent importing this repository's local `hid/` C source folder as a
 # namespace package; we need the third-party Python `hid` module instead.
@@ -20,20 +44,40 @@ except ModuleNotFoundError:
     )
     sys.exit(1)
 
-VID = 0x6666
-PID = 0x0001
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+
+DEVICE_VENDOR_ID = 0x6666
+DEVICE_PRODUCT_ID = 0x0001
+INPUT_REPORT_ID = 0x01
+
+HID_READ_SIZE_BYTES = 64
+RAW_PREVIEW_BYTES = 8
+IDLE_SLEEP_SEC = 0.005
+
+DEFAULT_UI_FPS = 8.0
+DEFAULT_STATUS_SEC = 1.0
+
+# The firmware supports a 32-bit button mask. The current physical wiring maps
+# the first eight bits to SW0..SW7, so the UI highlights those named buttons.
 BUTTON_NAMES = ["SW0", "SW1", "SW2", "SW3", "SW4", "SW5", "SW6", "SW7"]
 
 
 @dataclass
 class MonitorOptions:
+    """User-selected monitor mode and refresh timing."""
+
     mode: str
-    ui_fps: float = 8.0
-    status_sec: float = 1.0
+    ui_fps: float = DEFAULT_UI_FPS
+    status_sec: float = DEFAULT_STATUS_SEC
 
 
 @dataclass
 class MonitorState:
+    """Decoded HID state shared by all monitor modes."""
+
     current_mask: int = 0
     prev_mask: int = 0
     first_report: bool = True
@@ -46,14 +90,31 @@ class MonitorState:
     last_raw: str = "n/a"
 
 
-def find_device():
+# -----------------------------------------------------------------------------
+# HID Device Helpers
+# -----------------------------------------------------------------------------
+
+def find_device() -> dict[str, Any] | None:
+    """Return hidapi metadata for the configured device, if connected."""
+
     for dev in hid.enumerate():
-        if dev["vendor_id"] == VID and dev["product_id"] == PID:
+        if (
+            dev["vendor_id"] == DEVICE_VENDOR_ID
+            and dev["product_id"] == DEVICE_PRODUCT_ID
+        ):
             return dev
     return None
 
 
-def open_device(vendor_id, product_id):
+def open_device(vendor_id: int, product_id: int) -> Any:
+    """
+    Open a HID device across the two common Python hidapi bindings.
+
+    Fedora's python3-hidapi exposes `hid.Device`; older hidapi wrappers expose
+    `hid.device()`. Supporting both keeps this monitor easy to run on different
+    Linux distributions without changing the rest of the code.
+    """
+
     if hasattr(hid, "Device"):
         return hid.Device(vendor_id, product_id)
 
@@ -65,34 +126,74 @@ def open_device(vendor_id, product_id):
     raise RuntimeError("Unsupported hid module: missing Device/device API")
 
 
-def extract_mask(raw_report):
-    if len(raw_report) >= 5 and raw_report[0] == 0x01:
-        return int.from_bytes(raw_report[1:5], "little")
+def configure_nonblocking(dev: Any) -> None:
+    """Enable non-blocking reads when the selected hidapi binding supports it."""
+
+    if hasattr(dev, "set_nonblocking"):
+        dev.set_nonblocking(True)
+
+
+# -----------------------------------------------------------------------------
+# HID Report Decoding and Formatting
+# -----------------------------------------------------------------------------
+
+def extract_mask(raw_report: Sequence[int]) -> int | None:
+    """
+    Decode the 32-bit little-endian button mask from an input report.
+
+    Depending on platform and hidapi binding, interrupt reads may either include
+    the report ID as byte 0 or return only the report payload. Accept both forms
+    so the monitor works with the same firmware across host environments.
+    """
+
+    if len(raw_report) >= 5 and raw_report[0] == INPUT_REPORT_ID:
+        return int.from_bytes(bytes(raw_report[1:5]), "little")
     if len(raw_report) >= 4:
-        return int.from_bytes(raw_report[0:4], "little")
+        return int.from_bytes(bytes(raw_report[0:4]), "little")
     return None
 
 
-def format_pressed(mask):
+def format_pressed(mask: int) -> str:
+    """Return a comma-separated list of named buttons currently pressed."""
+
     pressed = [name for i, name in enumerate(BUTTON_NAMES) if mask & (1 << i)]
     return ", ".join(pressed) if pressed else "none"
 
 
-def mask_bits(mask, width=8):
-    return "".join("1" if mask & (1 << i) else "0" for i in range(width - 1, -1, -1))
+def format_mask_bits(mask: int, width: int = len(BUTTON_NAMES)) -> str:
+    """Format the low `width` bits with the most-significant bit first."""
+
+    return "".join(
+        "1" if mask & (1 << i) else "0"
+        for i in range(width - 1, -1, -1)
+    )
 
 
-def ask_choice(prompt, valid_choices, default):
+def format_raw_report(raw_report: Sequence[int]) -> str:
+    """Show the first few bytes of a HID report as uppercase hex pairs."""
+
+    return " ".join(f"{byte:02X}" for byte in raw_report[:RAW_PREVIEW_BYTES])
+
+
+# -----------------------------------------------------------------------------
+# Interactive Prompt Helpers
+# -----------------------------------------------------------------------------
+
+def ask_choice(prompt: str, valid_choices: set[str], default: str) -> str:
+    """Prompt until the user enters one of the accepted values."""
+
     while True:
         value = input(prompt).strip().lower()
         if not value:
             return default
         if value in valid_choices:
             return value
-        print(f"Invalid choice. Valid options: {', '.join(valid_choices)}")
+        print(f"Invalid choice. Valid options: {', '.join(sorted(valid_choices))}")
 
 
-def ask_float(prompt, default, minimum):
+def ask_float(prompt: str, default: float, minimum: float) -> float:
+    """Prompt for a floating-point value greater than `minimum`."""
+
     while True:
         value = input(prompt).strip()
         if not value:
@@ -108,7 +209,9 @@ def ask_float(prompt, default, minimum):
         return parsed
 
 
-def choose_options():
+def choose_options() -> MonitorOptions:
+    """Collect the monitor mode and refresh settings before opening USB."""
+
     print("USB HID Monitor")
     print("=============")
     print("1) Live dashboard (recommended)")
@@ -121,15 +224,21 @@ def choose_options():
         sys.exit(0)
 
     if choice == "1":
-        fps = ask_float("Refresh rate FPS [8]: ", 8.0, 0)
+        fps = ask_float("Refresh rate FPS [8]: ", DEFAULT_UI_FPS, 0)
         return MonitorOptions(mode="ui", ui_fps=fps)
     if choice == "2":
-        status = ask_float("Status interval seconds [1.0]: ", 1.0, 0)
+        status = ask_float("Status interval seconds [1.0]: ", DEFAULT_STATUS_SEC, 0)
         return MonitorOptions(mode="events", status_sec=status)
     return MonitorOptions(mode="dump")
 
 
-def init_state():
+# -----------------------------------------------------------------------------
+# Monitor State Updates
+# -----------------------------------------------------------------------------
+
+def init_state() -> MonitorState:
+    """Create a state object with all timing fields initialized to now."""
+
     now = time.monotonic()
     return MonitorState(
         started_at=now,
@@ -139,11 +248,22 @@ def init_state():
     )
 
 
-def apply_report(state, raw, now):
-    state.report_count += 1
-    state.last_raw = " ".join(f"{b:02X}" for b in raw[:8])
+def apply_report(
+    state: MonitorState,
+    raw_report: Sequence[int],
+    now: float,
+) -> list[str]:
+    """
+    Decode a raw HID report and return human-readable state-change events.
 
-    mask = extract_mask(raw)
+    The dashboard reads state directly from `MonitorState`; log modes use the
+    returned events to print only meaningful transitions.
+    """
+
+    state.report_count += 1
+    state.last_raw = format_raw_report(raw_report)
+
+    mask = extract_mask(raw_report)
     if mask is None:
         return []
 
@@ -175,20 +295,33 @@ def apply_report(state, raw, now):
     return events
 
 
-def render_dashboard(info, state):
+# -----------------------------------------------------------------------------
+# Terminal Rendering
+# -----------------------------------------------------------------------------
+
+def render_dashboard(info: dict[str, Any], state: MonitorState) -> list[str]:
+    """Build the full-screen dashboard as a list of terminal lines."""
+
     now = time.monotonic()
     age_ms = int((now - state.last_report_at) * 1000)
     unchanged_ms = int((now - state.last_change_at) * 1000)
     uptime_s = now - state.started_at
+    device_name = (
+        f"{info.get('manufacturer_string', '')} "
+        f"{info.get('product_string', '')}"
+    )
 
     lines = [
         "USB HID Monitor (Ctrl+C to exit)",
         "",
-        f"Device: {info.get('manufacturer_string', '')} {info.get('product_string', '')}",
-        f"VID:PID 0x{VID:04x}:0x{PID:04x}",
+        f"Device: {device_name}",
+        f"VID:PID 0x{DEVICE_VENDOR_ID:04x}:0x{DEVICE_PRODUCT_ID:04x}",
         f"Path:   {info.get('path', '')}",
         "",
-        f"Mask:   {state.current_mask:#010x}  bits[{mask_bits(state.current_mask)}]",
+        (
+            f"Mask:   {state.current_mask:#010x}  "
+            f"bits[{format_mask_bits(state.current_mask)}]"
+        ),
         f"Pressed:{format_pressed(state.current_mask)}",
         f"Reports:{state.report_count}  last report:{age_ms} ms ago",
         f"State unchanged: {unchanged_ms} ms",
@@ -210,7 +343,9 @@ def render_dashboard(info, state):
     return lines
 
 
-def paint_fullscreen(lines):
+def paint_fullscreen(lines: Sequence[str]) -> None:
+    """Paint a stable full-screen terminal view using ANSI escape sequences."""
+
     sys.stdout.write("\x1b[H")
     for line in lines:
         sys.stdout.write("\x1b[2K")
@@ -220,7 +355,26 @@ def paint_fullscreen(lines):
     sys.stdout.flush()
 
 
-def run_ui_loop(dev, info, options):
+# -----------------------------------------------------------------------------
+# Monitor Modes
+# -----------------------------------------------------------------------------
+
+def read_report(dev: Any) -> Sequence[int]:
+    """Read one HID report. In non-blocking mode this may return an empty list."""
+
+    return dev.read(HID_READ_SIZE_BYTES)
+
+
+def sleep_if_idle(raw_report: Sequence[int]) -> None:
+    """Avoid a busy loop when non-blocking HID reads have no data available."""
+
+    if not raw_report:
+        time.sleep(IDLE_SLEEP_SEC)
+
+
+def run_ui_loop(dev: Any, info: dict[str, Any], options: MonitorOptions) -> None:
+    """Run the live terminal dashboard."""
+
     state = init_state()
     frame_period = 1.0 / options.ui_fps
     next_frame = time.monotonic()
@@ -232,32 +386,33 @@ def run_ui_loop(dev, info, options):
     try:
         while True:
             now = time.monotonic()
-            raw = dev.read(64)
-            if raw:
-                apply_report(state, raw, now)
+            raw_report = read_report(dev)
+            if raw_report:
+                apply_report(state, raw_report, now)
 
             if now >= next_frame:
                 paint_fullscreen(render_dashboard(info, state))
                 next_frame = now + frame_period
 
-            if not raw:
-                time.sleep(0.005)
+            sleep_if_idle(raw_report)
     except KeyboardInterrupt:
         sys.stdout.write("\x1b[2J\x1b[H")
         sys.stdout.flush()
         print("Exiting.")
 
 
-def run_event_loop(dev, options):
+def run_event_loop(dev: Any, options: MonitorOptions) -> None:
+    """Run a compact event log with periodic status lines."""
+
     state = init_state()
     print("\nListening... (Ctrl+C to exit)\n")
 
     try:
         while True:
             now = time.monotonic()
-            raw = dev.read(64)
-            if raw:
-                for event in apply_report(state, raw, now):
+            raw_report = read_report(dev)
+            if raw_report:
+                for event in apply_report(state, raw_report, now):
                     print(f"  {event}")
 
             if now - state.last_status_at >= options.status_sec:
@@ -269,53 +424,67 @@ def run_event_loop(dev, options):
                 )
                 state.last_status_at = now
 
-            if not raw:
-                time.sleep(0.005)
+            sleep_if_idle(raw_report)
     except KeyboardInterrupt:
         print("\nExiting.")
 
 
-def run_dump_loop(dev):
+def run_dump_loop(dev: Any) -> None:
+    """Print every report exactly as received plus the decoded mask."""
+
     state = init_state()
     print("\nListening... (Ctrl+C to exit)\n")
 
     try:
         while True:
             now = time.monotonic()
-            raw = dev.read(64)
-            if raw:
-                events = apply_report(state, raw, now)
-                print(f"  report[{state.report_count}] raw={state.last_raw} mask={state.current_mask:#010x}")
+            raw_report = read_report(dev)
+            if raw_report:
+                events = apply_report(state, raw_report, now)
+                print(
+                    f"  report[{state.report_count}] "
+                    f"raw={state.last_raw} mask={state.current_mask:#010x}"
+                )
                 for event in events:
                     print(f"    {event}")
             else:
-                time.sleep(0.005)
+                sleep_if_idle(raw_report)
     except KeyboardInterrupt:
         print("\nExiting.")
 
 
-def main():
+# -----------------------------------------------------------------------------
+# Entry Point
+# -----------------------------------------------------------------------------
+
+def main() -> None:
     options = choose_options()
 
     info = find_device()
     if not info:
-        print(f"Device {VID:#06x}:{PID:#06x} not found.", file=sys.stderr)
-        print("Check: lsusb | grep " + hex(VID)[2:], file=sys.stderr)
+        print(
+            f"Device {DEVICE_VENDOR_ID:#06x}:{DEVICE_PRODUCT_ID:#06x} not found.",
+            file=sys.stderr,
+        )
+        print("Check: lsusb | grep " + hex(DEVICE_VENDOR_ID)[2:], file=sys.stderr)
         sys.exit(1)
 
-    print(f"\nFound: {info.get('manufacturer_string', '')} {info.get('product_string', '')}")
+    device_name = (
+        f"{info.get('manufacturer_string', '')} "
+        f"{info.get('product_string', '')}"
+    )
+    print(f"\nFound: {device_name}")
     print(f"  Path: {info.get('path', '')}")
     print(f"  UsagePage: 0x{info.get('usage_page', 0):04X}")
 
     try:
-        dev = open_device(VID, PID)
+        dev = open_device(DEVICE_VENDOR_ID, DEVICE_PRODUCT_ID)
     except Exception as err:
         print(f"Failed to open device: {err}", file=sys.stderr)
         sys.exit(1)
 
     try:
-        if hasattr(dev, "set_nonblocking"):
-            dev.set_nonblocking(True)
+        configure_nonblocking(dev)
 
         if options.mode == "ui":
             run_ui_loop(dev, info, options)
